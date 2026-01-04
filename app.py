@@ -118,7 +118,12 @@ def parse_excel_ledger(uploaded_file):
             df = pd.read_excel(uploaded_file)
             start_row = 2
 
-        col_map = {'Date(NT)': 'date', 'Tgl Nota': 'date', 'Date': 'date', 'Description': 'description', 'DB': 'debit', 'CR': 'credit'}
+        col_map = {
+            'Date(NT)': 'date', 'Tgl Nota': 'date', 'Date': 'date',
+            'Description': 'description',
+            'DB': 'debit', 'CR': 'credit',
+            'IN': 'debit', 'OUT': 'credit'
+        }
         df = df.rename(columns=col_map)
         df['excel_row'] = range(start_row, start_row + len(df))
 
@@ -265,6 +270,7 @@ if not st.session_state['bank_df'].empty and not st.session_state['ledger_df'].e
                         l_rows.insert(0, "Unmatch", False)
                         edited_l = st.data_editor(
                             l_rows[['Unmatch', 'excel_row', 'date', 'description', 'amount', 'note']],
+                            disabled=["excel_row", "date", "description", "amount"],
                             key=f"ge_l_{i}", hide_index=True,
                             column_config={
                                 "Unmatch": st.column_config.CheckboxColumn(width="small"),
@@ -289,6 +295,7 @@ if not st.session_state['bank_df'].empty and not st.session_state['ledger_df'].e
                         b_rows.insert(0, "Unmatch", False)
                         edited_b = st.data_editor(
                             b_rows[['Unmatch', 'date', 'description', 'amount', 'note']],
+                            disabled=["date", "description", "amount"],
                             key=f"ge_b_{i}", hide_index=True,
                             column_config={
                                 "Unmatch": st.column_config.CheckboxColumn(width="small"),
@@ -330,6 +337,7 @@ if not st.session_state['bank_df'].empty and not st.session_state['ledger_df'].e
         st.markdown("**📖 Ledger Items**")
         edited_ul = st.data_editor(
             unmatched_l[['Select', 'excel_row', 'date', 'description', 'amount', 'note']],
+            disabled=["excel_row", "date", "description", "amount"],
             key="ul_editor", hide_index=True, height=500, width='stretch',
             column_config={
                 "Select": st.column_config.CheckboxColumn(width="small"),
@@ -344,6 +352,7 @@ if not st.session_state['bank_df'].empty and not st.session_state['ledger_df'].e
         st.markdown("**🏦 Bank Items**")
         edited_ub = st.data_editor(
             unmatched_b[['Select', 'date', 'description', 'amount', 'note']],
+            disabled=["date", "description", "amount"],
             key="ub_editor", hide_index=True, height=500, width='stretch',
             column_config={
                 "Select": st.column_config.CheckboxColumn(width="small"),
