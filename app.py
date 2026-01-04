@@ -153,7 +153,7 @@ def parse_excel_ledger(uploaded_file):
         if 'description' not in df.columns: df['description'] = "No Desc"
         if 'date' not in df.columns: df['date'] = ""
         if 'ref_code' not in df.columns: df['ref_code'] = ""
-        
+        df['ref_code'] = df['ref_code'].astype(str).str.strip()
         df['date'] = df['date'].apply(clean_excel_date)
         df['debit'] = pd.to_numeric(df['debit'], errors='coerce').fillna(0)
         df['credit'] = pd.to_numeric(df['credit'], errors='coerce').fillna(0)
