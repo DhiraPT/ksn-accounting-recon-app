@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import pdfplumber
 import re
+import collections
 from datetime import datetime, timedelta
 
 # ==========================================
@@ -101,12 +102,14 @@ def clean_excel_date(val):
 
 def parse_excel_ledger(uploaded_file):
     try:
+        # READ FIRST SHEET ONLY (Default behavior)
         raw_df = pd.read_excel(uploaded_file, header=None)
+        
         header_row_idx = 0
         found = False
         for i, row in raw_df.iterrows():
             row_str = " ".join([str(x) for x in row.values])
-            if "Description" in row_str and "Date" in row_str:
+            if "Description" in row_str and ("Date" in row_str or "Tgl" in row_str):
                 header_row_idx = i
                 found = True
                 break
@@ -119,6 +122,7 @@ def parse_excel_ledger(uploaded_file):
             start_row = 2
 
         col_map = {
+            'No': 'ref_code', 'No ': 'ref_code', 'No.': 'ref_code',
             'Date(NT)': 'date', 'Tgl Nota': 'date', 'Date': 'date',
             'Description': 'description',
             'DB': 'debit', 'CR': 'credit',
@@ -127,27 +131,113 @@ def parse_excel_ledger(uploaded_file):
         df = df.rename(columns=col_map)
         df['excel_row'] = range(start_row, start_row + len(df))
 
+        # Ensure columns exist
         if 'debit' not in df.columns: df['debit'] = 0
         if 'credit' not in df.columns: df['credit'] = 0
         if 'description' not in df.columns: df['description'] = "No Desc"
         if 'date' not in df.columns: df['date'] = ""
+        if 'ref_code' not in df.columns: df['ref_code'] = ""
         
         df['date'] = df['date'].apply(clean_excel_date)
         df['debit'] = pd.to_numeric(df['debit'], errors='coerce').fillna(0)
         df['credit'] = pd.to_numeric(df['credit'], errors='coerce').fillna(0)
         df['amount'] = df['debit'] + df['credit']
         
+        # Filter valid rows
         df = df[df['amount'] > 0.01].copy()
+
         df['id'] = df.index.astype(str) + "_ledger"
         df['matched'] = False
         df['note'] = ""
-        return df[['id', 'excel_row', 'date', 'description', 'amount', 'matched', 'note']]
+
+        return df[['id', 'excel_row', 'date', 'ref_code', 'description', 'amount', 'matched', 'note']]
+
     except Exception as e:
         st.error(f"Error parsing Excel: {e}")
         return pd.DataFrame()
 
 def format_currency(amount):
     return f"{amount:,.2f}"
+
+def generate_group_name(l_rows, b_rows):
+    """Generates a group name based on common codes (e.g. KKM045)."""
+    # 1. Combine Ledger 'ref_code' (No column) and Bank 'description'
+    # We prioritize the Ref Code as it's cleaner, but include Bank desc for coverage
+    l_text = l_rows['ref_code'].astype(str).tolist()
+    b_text = b_rows['description'].astype(str).tolist()
+    
+    full_text = " ".join(l_text + b_text).upper()
+    
+    # 2. Use your specific Regex
+    # Matches "KKM045", "KKMS 006", "KKM045-1"
+    codes = re.findall(r"\b[A-Z]{2,}\s?\d{3,}[-\d]*\b", full_text)
+    
+    if codes:
+        # 3. Clean: Split by '-' and take index 0
+        # Example: "KKM045-1" -> "KKM045"
+        cleaned_codes = [c.split('-')[0].strip() for c in codes]
+        
+        # 4. Find most common
+        most_common = collections.Counter(cleaned_codes).most_common(1)[0][0]
+        return f"({most_common})"
+        
+    return ""
+
+def auto_match_logic():
+    """
+    New Logic: 
+    1. Get unique codes from Ledger 'No' column (stripping suffix like -1).
+    2. Check if that code exists in any Bank Description.
+    3. If yes, check if the sums balance.
+    """
+    u_l = st.session_state['ledger_df'][~st.session_state['ledger_df']['matched']]
+    u_b = st.session_state['bank_df'][~st.session_state['bank_df']['matched']]
+    
+    matches_found = 0
+    
+    # 1. Prepare Ledger Codes (Normalize: KKM045-1 -> KKM045)
+    # We create a temporary column for matching
+    u_l = u_l.copy()
+    u_l['base_code'] = u_l['ref_code'].astype(str).str.upper().apply(lambda x: x.split('-')[0].strip())
+    
+    # Filter out empty or short codes to avoid false positives
+    valid_codes = [c for c in u_l['base_code'].unique() if len(c) >= 3 and c != "NAN"]
+    
+    for code in valid_codes:
+        # 2. Find Bank items containing this code
+        # We search the code inside the Bank Description
+        potential_bank = u_b[u_b['description'].astype(str).str.upper().str.contains(code, regex=False)]
+        
+        if not potential_bank.empty:
+            # 3. Get all Ledger items with this specific base code
+            potential_ledger = u_l[u_l['base_code'] == code]
+            
+            # 4. Check every bank item found (usually 1-to-Many)
+            for b_idx, b_row in potential_bank.iterrows():
+                b_amt = b_row['amount']
+                l_sum = potential_ledger['amount'].sum()
+                
+                # Check Balance
+                if abs(l_sum - b_amt) < 1.0:
+                    l_ids = potential_ledger['id'].tolist()
+                    b_ids = [b_row['id']]
+                    
+                    # Apply Match
+                    st.session_state['ledger_df'].loc[st.session_state['ledger_df']['id'].isin(l_ids), 'matched'] = True
+                    st.session_state['bank_df'].loc[st.session_state['bank_df']['id'].isin(b_ids), 'matched'] = True
+                    
+                    st.session_state['matches'].append({
+                        "ledger_ids": l_ids,
+                        "bank_ids": b_ids
+                    })
+                    matches_found += 1
+                    
+                    # Update pools to prevent double matching
+                    u_l = u_l[~u_l['id'].isin(l_ids)]
+                    u_b = u_b[~u_b['id'].isin(b_ids)]
+                    break # Move to next code
+
+    return matches_found
 
 # ==========================================
 # 2. APP UI
@@ -243,9 +333,11 @@ if not st.session_state['bank_df'].empty and not st.session_state['ledger_df'].e
             l_sum = l_rows['amount'].sum() if not l_rows.empty else 0
             b_sum = b_rows['amount'].sum() if not b_rows.empty else 0
             diff = l_sum - b_sum
+
+            smart_tag = generate_group_name(l_rows, b_rows)
             
             status = "🟢" if abs(diff) < 0.01 else "🔴"
-            title = f"Group #{group_num} {status} | Ledger: {format_currency(l_sum)} | Bank: {format_currency(b_sum)} | Diff: {format_currency(diff)}"
+            title = f"Group #{group_num} {smart_tag} {status} | Ledger: {format_currency(l_sum)} | Bank: {format_currency(b_sum)} | Diff: {format_currency(diff)}"
 
             # --- INNER ACCORDION ---
             with st.expander(title, expanded=False):
@@ -319,6 +411,17 @@ if not st.session_state['bank_df'].empty and not st.session_state['ledger_df'].e
         st.rerun()
 
     st.markdown("---")
+
+    # Auto-Match Button
+    c_auto1, c_auto2 = st.columns([1, 4])
+    with c_auto1:
+        if st.button("✨ Auto-Match by Code", help="Matches Bank items to Ledger items if they share a code (e.g. KKM045) and the amount sums up."):
+            count = auto_match_logic()
+            if count > 0:
+                st.success(f"Successfully auto-matched {count} groups!")
+                st.rerun()
+            else:
+                st.warning("No code-based matches found.")
 
     # ==========================================
     # SECTION 2: UNMATCHED WORKSPACE
