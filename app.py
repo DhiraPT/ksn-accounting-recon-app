@@ -2,13 +2,13 @@ import streamlit as st
 import pandas as pd
 import pdfplumber
 import re
-import collections
 from datetime import datetime, timedelta
 
 # ==========================================
 # 1. BANKING-GRADE PARSERS
 # ==========================================
 
+@st.cache_data
 def extract_text_from_pdf(uploaded_file):
     full_text = ""
     try:
@@ -21,6 +21,15 @@ def extract_text_from_pdf(uploaded_file):
         return None
     return full_text
 
+def parse_amount_str(raw_amt, type_grp):
+    clean_amt = raw_amt.replace(',', '')
+    txn_type = type_grp if type_grp else "CR"
+    try:
+        return float(clean_amt), txn_type
+    except ValueError:
+        return 0.0, txn_type
+
+@st.cache_data
 def parse_bank_statement(text_content):
     if not text_content: return pd.DataFrame()
     transactions = []
@@ -28,6 +37,7 @@ def parse_bank_statement(text_content):
     current_txn = {}
     buffer_desc = []
     
+    DEFAULT_YEAR = str(datetime.now().year)
     date_pattern = re.compile(r"^(\d{2}/\d{2})")
     # Matches amounts like 50,000.00 or 1,234.56
     amount_pattern = re.compile(r"([\d,]+\.\d{2})\s*(DB|CR)?")
@@ -45,17 +55,12 @@ def parse_bank_statement(text_content):
                 current_txn = {}
                 buffer_desc = []
             date_str = date_match.group(1)
-            current_txn['date'] = date_str + "/2025" 
+            current_txn['date'] = f"{date_str}/{DEFAULT_YEAR}"
             amount_match = amount_pattern.search(line)
             if amount_match:
-                raw_amt = amount_match.group(1)
-                type_str = amount_match.group(2) if amount_match.group(2) else "CR"
-                clean_amt = raw_amt.replace(',', '')
-                try:
-                    current_txn['amount'] = float(clean_amt)
-                    current_txn['type'] = type_str
-                except ValueError:
-                    current_txn['amount'] = 0.0
+                amt, type_str = parse_amount_str(amount_match.group(1), amount_match.group(2))
+                current_txn['amount'] = amt
+                current_txn['type'] = type_str
                 clean_line = line.replace(date_str, '').replace(amount_match.group(0), '').strip()
                 buffer_desc.append(clean_line)
             else:
@@ -63,12 +68,9 @@ def parse_bank_statement(text_content):
         elif current_txn and 'amount' not in current_txn:
             amount_match = amount_pattern.search(line)
             if amount_match:
-                raw_amt = amount_match.group(1)
-                clean_amt = raw_amt.replace(',', '')
-                try:
-                    current_txn['amount'] = float(clean_amt)
-                    current_txn['type'] = amount_match.group(2) or "CR"
-                except: pass
+                amt, type_str = parse_amount_str(amount_match.group(1), amount_match.group(2))
+                current_txn['amount'] = amt
+                current_txn['type'] = type_str
             else:
                 buffer_desc.append(line)
         else:
@@ -100,10 +102,12 @@ def clean_excel_date(val):
         except ValueError: continue
     return val_str
 
+@st.cache_data
 def parse_excel_ledger(uploaded_file):
     try:
         # READ FIRST SHEET ONLY (Default behavior)
-        raw_df = pd.read_excel(uploaded_file, header=None)
+        # Optimization: Read only first 20 rows to find header
+        raw_df = pd.read_excel(uploaded_file, header=None, nrows=20)
         
         header_row_idx = 0
         found = False
@@ -114,6 +118,7 @@ def parse_excel_ledger(uploaded_file):
                 found = True
                 break
         
+        uploaded_file.seek(0)
         if found:
             df = pd.read_excel(uploaded_file, header=header_row_idx)
             start_row = header_row_idx + 2 
@@ -160,27 +165,19 @@ def format_currency(amount):
     return f"{amount:,.2f}"
 
 def generate_group_name(l_rows, b_rows):
-    """Generates a group name based on common codes (e.g. KKM045)."""
-    # 1. Combine Ledger 'ref_code' (No column) and Bank 'description'
-    # We prioritize the Ref Code as it's cleaner, but include Bank desc for coverage
-    l_text = l_rows['ref_code'].astype(str).tolist()
-    b_text = b_rows['description'].astype(str).tolist()
+    """Generates a group name based on Ledger Ref Code."""
+    if l_rows.empty:
+        return ""
+
+    # Extract codes from Ledger 'ref_code' (e.g. "KKM045-1" -> "KKM045")
+    codes = l_rows['ref_code'].astype(str).str.upper().apply(lambda x: x.split('-')[0].strip())
     
-    full_text = " ".join(l_text + b_text).upper()
+    # Get unique values, excluding 'NAN'
+    unique_codes = sorted([c for c in codes.unique() if c and c != 'NAN'])
     
-    # 2. Use your specific Regex
-    # Matches "KKM045", "KKMS 006", "KKM045-1"
-    codes = re.findall(r"\b[A-Z]{2,}\s?\d{3,}[-\d]*\b", full_text)
-    
-    if codes:
-        # 3. Clean: Split by '-' and take index 0
-        # Example: "KKM045-1" -> "KKM045"
-        cleaned_codes = [c.split('-')[0].strip() for c in codes]
-        
-        # 4. List unique codes
-        unique_codes = sorted(list(set(cleaned_codes)))
+    if unique_codes:
         return f"({', '.join(unique_codes)})"
-        
+
     return ""
 
 def auto_match_logic():
