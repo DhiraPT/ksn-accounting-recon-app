@@ -476,8 +476,8 @@ if not st.session_state['bank_df'].empty and not st.session_state['ledger_df'].e
     st.markdown("### Action")
     m1, m2, m3, btn = st.columns([2, 2, 2, 2])
     
-    m1.metric("Selected Ledger", format_currency(l_sum))
-    m2.metric("Selected Bank", format_currency(b_sum))
+    m1.metric(f"Selected Ledger ({len(sel_l)})", format_currency(l_sum))
+    m2.metric(f"Selected Bank ({len(sel_b)})", format_currency(b_sum))
     
     if diff == 0 and (l_sum > 0 or b_sum > 0):
         m3.metric("Difference", "0.00", delta="Balanced!")
