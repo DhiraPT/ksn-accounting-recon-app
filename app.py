@@ -177,9 +177,9 @@ def generate_group_name(l_rows, b_rows):
         # Example: "KKM045-1" -> "KKM045"
         cleaned_codes = [c.split('-')[0].strip() for c in codes]
         
-        # 4. Find most common
-        most_common = collections.Counter(cleaned_codes).most_common(1)[0][0]
-        return f"({most_common})"
+        # 4. List unique codes
+        unique_codes = sorted(list(set(cleaned_codes)))
+        return f"({', '.join(unique_codes)})"
         
     return ""
 
