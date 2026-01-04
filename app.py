@@ -37,7 +37,18 @@ def parse_bank_statement(text_content):
     current_txn = {}
     buffer_desc = []
     
-    DEFAULT_YEAR = str(datetime.now().year)
+    # 1. Default to current year as a fallback
+    found_year = str(datetime.now().year)
+
+    # 2. Try to find the year in the text using Regex
+    # Looks for "PERIODE", ignores case, matches any characters until it finds 4 digits
+    # Example match: "PERIODE : AGUSTUS 2025" -> captures "2025"
+    year_match = re.search(r"PERIODE.*?(\d{4})", text_content, re.IGNORECASE)
+
+    if year_match:
+        found_year = year_match.group(1)
+
+    DEFAULT_YEAR = found_year
     date_pattern = re.compile(r"^(\d{2}/\d{2})")
     # Matches amounts like 50,000.00 or 1,234.56
     amount_pattern = re.compile(r"([\d,]+\.\d{2})\s*(DB|CR)?")
